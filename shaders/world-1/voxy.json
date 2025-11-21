@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "uniforms": ["aspectRatio", "atlasSize", "blindness", "blockEntityId", "cameraPosition", "cameraPositionFract", "cameraPositionInt", "cloudHeight", "colortex0", "colortex1", "colortex2", "colortex3", "colortex4", "colortex5", "colortex6", "colortex7", "colortex8", "currentRenderedItemId", "darknessFactor", "darknessLightFactor", "depthtex0", "depthtex1", "dhDepthTex", "dhDepthTex1", "dhProjection", "dhProjectionInverse", "dhRenderDistance", "endFlashIntensity", "endFlashPosition", "entityColor", "entityId", "eyeAltitude", "eyeBrightness", "eyeBrightnessM", "eyeBrightnessM2", "far", "floodfill_sampler", "floodfill_sampler_copy", "fogColor", "frameCounter", "frameTime", "frameTimeCounter", "frameTimeSmooth", "framemod2", "framemod4", "framemod8", "gaux2", "gaux4", "gbufferModelView", "gbufferModelViewInverse", "gbufferPreviousModelView", "gbufferPreviousProjection", "gbufferProjection", "gbufferProjectionInverse", "heavyFog", "heldBlockLightValue", "heldBlockLightValue2", "heldItemId", "heldItemId2", "inBasaltDeltas", "inCrimsonForest", "inDry", "inNetherWastes", "inPaleGarden", "inRainy", "inSnowy", "inSoulValley", "inWarpedForest", "isEyeInCave", "isEyeInWater", "lightningBoltPosition", "maxBlindnessDarkness", "moonPhase", "near", "nightVision", "noisetex", "normals", "playerMood", "previousCameraPosition", "previousCameraPositionFract", "previousCameraPositionInt", "previousEndFlashIntensity", "puddle_sampler", "rainFactor", "rainStrength", "relativeEyePosition", "renderStage", "screenBrightness", "shadowModelView", "shadowModelViewInverse", "shadowProjection", "shadowProjectionInverse", "shadowcolor0", "shadowcolor1", "shadowtex0", "shadowtex1", "skyColor", "specular", "starter", "sunAngle", "tex", "textureAtlas", "velocity", "viewHeight", "viewWidth", "voxel_sampler", "wetness", "worldDay", "worldTime", "wsr_sampler", "wsr_sampler_lod"],
+  "samplers": {
+  "tex": "sampler2D",
+  "noisetex": "sampler2D",
+  "colortex0": "sampler2D",
+  "colortex1": "sampler2D",
+  "colortex2": "sampler2D",
+  "colortex3": "sampler2D",
+  "colortex4": "sampler2D",
+  "colortex5": "sampler2D",
+  "colortex6": "sampler2D",
+  "colortex7": "sampler2D",
+  "colortex8": "sampler2D",
+  "depthtex0": "sampler2D",
+  "depthtex1": "sampler2D",
+  "gaux2": "sampler2D",
+  "gaux4": "sampler2D",
+  "normals": "sampler2D",
+  "specular": "sampler2D",
+  "shadowtex0": "sampler2DShadow",
+  "shadowtex1": "sampler2DShadow",
+  "shadowcolor0": "sampler2D",
+  "shadowcolor1": "sampler2D",
+  "dhDepthTex": "sampler2D",
+  "dhDepthTex1": "sampler2D",
+  "floodfill_sampler": "sampler3D",
+  "floodfill_sampler_copy": "sampler3D",
+  "puddle_sampler": "usampler2D",
+  "voxel_sampler": "usampler3D",
+  "wsr_sampler": "usampler3D",
+  "wsr_sampler_lod": "usampler3D",
+  "textureAtlas": "sampler2D"
+},
+  "opaqueDrawBuffers": [0, 6
+    #if BLOCK_REFLECT_QUALITY >= 2 && RP_MODE != 0
+    ,4
+    #endif
+  ],
+  "translucentDrawBuffers": [0, 3
+    #if DETAIL_QUALITY >= 3 || (WATER_REFLECT_QUALITY > 0 && WORLD_SPACE_REFLECTIONS > 0)
+    ,6
+    #if WORLD_SPACE_REFLECTIONS > 0
+    ,4,8
+    #endif
+    #elif WORLD_SPACE_REFLECTIONS > 0
+    ,4,8
+    #endif
+  ],
+  "excludeLodsFromVanillaDepth": true
+}
