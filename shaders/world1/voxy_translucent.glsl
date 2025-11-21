@@ -2,9 +2,58 @@
 #define FRAGMENT_SHADER
 #define END
 #define GBUFFERS_WATER
+#define VOXY
+
+
+#define texture2D texture
+#define texture2DLod textureLod
 #define COMPLEMENTARY_VOXY_PATCH
 
+// Mock unsupported uniforms
+#ifndef VOXY_MOCK_DEFINED
+#define VOXY_MOCK_DEFINED
+#endif
+
+
 #include "/lib/common.glsl"
+#include "/lib/util/dither.glsl"
+#include "/lib/util/spaceConversion.glsl"
+#include "/lib/lighting/mainLighting.glsl"
+#include "/lib/atmospherics/fog/mainFog.glsl"
+    #include "/lib/atmospherics/sky.glsl"
+            #include "/lib/atmospherics/auroraBorealis.glsl"
+            #include "/lib/atmospherics/nightNebula.glsl"
+            #include "/lib/atmospherics/stars.glsl"
+            #include "/lib/atmospherics/clouds/mainClouds.glsl"
+    #include "/lib/materials/materialMethods/reflections.glsl"
+    #include "/lib/antialiasing/jitter.glsl"
+    #include "/lib/util/miplevel.glsl"
+    #include "/lib/materials/materialMethods/generatedNormals.glsl"
+    #include "/lib/materials/materialMethods/customEmission.glsl"
+    #include "/lib/materials/materialHandling/customMaterials.glsl"
+    #include "/lib/colors/colorMultipliers.glsl"
+    #include "/lib/colors/moonPhaseInfluence.glsl"
+    #include "/lib/misc/colorCodedPrograms.glsl"
+    #include "/lib/voxelization/lightVoxelization.glsl"
+    #include "/lib/materials/materialMethods/connectedGlass.glsl"
+
+
+
+// Polyfill for GetSunVector (Fragment Shader version)
+vec3 GetSunVector() {
+    const vec2 sunRotationData = vec2(cos(sunPathRotation * 0.01745329251994), -sin(sunPathRotation * 0.01745329251994));
+    #ifdef OVERWORLD
+        float ang = fract(timeAngle - 0.25);
+        ang = (ang + (cos(ang * 3.14159265358979) * -0.5 + 0.5 - ang) / 3.0) * 6.28318530717959;
+        return normalize((gbufferModelView * vec4(vec3(-sin(ang), cos(ang) * sunRotationData) * 2000.0, 1.0)).xyz);
+    #elif defined END
+        float ang = 0.0;
+        return normalize((gbufferModelView * vec4(vec3(0.0, sunRotationData * 2000.0), 1.0)).xyz);
+    #else
+        return vec3(0.0);
+    #endif
+}
+
 
 layout(location = 0) out vec4 voxyOut0;
 layout(location = 1) out vec4 voxyOut1;
@@ -21,17 +70,19 @@ void voxy_emitFragment(VoxyFragmentParameters parameters) {
 
     vec3 normal = vec3(uint((parameters.face>>1)==2), uint((parameters.face>>1)==0), uint((parameters.face>>1)==1)) * (float(int(parameters.face)&1)*2.0-1.0);
 
-    vec3 screenPos = vec3(gl_FragCoord.xy / vec2(viewWidth, viewHeight), gl_FragCoord.z);
-    vec4 ndc = vec4(screenPos.xy * 2.0 - 1.0, screenPos.z * 2.0 - 1.0, 1.0);
-    vec4 viewPos4 = gbufferProjectionInverse * ndc;
-    viewPos4 /= viewPos4.w;
-    vec3 viewPos = viewPos4.xyz;
-    vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
+    vec3 voxy_screenPos = vec3(gl_FragCoord.xy / vec2(viewWidth, viewHeight), gl_FragCoord.z);
+    vec4 ndc = vec4(voxy_screenPos.xy * 2.0 - 1.0, voxy_screenPos.z * 2.0 - 1.0, 1.0);
+    vec4 voxy_viewPos4 = gbufferProjectionInverse * ndc;
+    voxy_viewPos4 /= voxy_viewPos4.w;
+    vec3 voxy_viewPos = voxy_viewPos4.xyz;
+    vec3 playerPos = (gbufferModelViewInverse * vec4(voxy_viewPos, 1.0)).xyz;
 
     vec3 upVec = normalize(gbufferModelView[1].xyz);
     vec3 eastVec = normalize(gbufferModelView[0].xyz);
     vec3 northVec = normalize(gbufferModelView[2].xyz);
     vec3 sunVec = GetSunVector();
+
+    ivec2 atlasSize = textureSize(tex, 0);
 
     vec2 midCoord = vec2(0.0);
     vec2 signMidCoordPos = vec2(0.0);
@@ -41,10 +92,111 @@ void voxy_emitFragment(VoxyFragmentParameters parameters) {
         vec3 tangent = vec3(0.0);
     #endif
     #ifdef POM
-        vec3 viewVector = viewPos;
+        vec3 viewVector = voxy_viewPos;
         vec4 vTexCoordAM = vec4(0.0);
     #endif
 
+    // Inject Logic
+    /////////////////////////////////////
+// Complementary Shaders by EminGT //
+/////////////////////////////////////
+
+//Common//
+
+//////////Fragment Shader//////////Fragment Shader//////////Fragment Shader//////////
+
+
+
+
+
+#if WATER_STYLE >= 2 || RAIN_PUDDLES >= 1 && WATER_STYLE == 1 && WATER_MAT_QUALITY >= 2 || defined GENERATED_NORMALS || defined CUSTOM_PBR
+#endif
+
+#ifdef POM
+#endif
+
+//Pipeline Constants//
+
+//Common Variables//
+float NdotU = dot(normal, upVec);
+float NdotUmax0 = max(NdotU, 0.0);
+float SdotU = dot(sunVec, upVec);
+float sunFactor = SdotU < 0.0 ? clamp(SdotU + 0.375, 0.0, 0.75) / 0.75 : clamp(SdotU + 0.03125, 0.0, 0.0625) / 0.0625;
+float sunVisibility = clamp(SdotU + 0.0625, 0.0, 0.125) / 0.125;
+float sunVisibility2 = sunVisibility * sunVisibility;
+float shadowTimeVar1 = abs(sunVisibility - 0.5) * 2.0;
+float shadowTimeVar2 = shadowTimeVar1 * shadowTimeVar1;
+float shadowTime = shadowTimeVar2 * shadowTimeVar2;
+
+    vec3 lightVec = sunVec * ((timeAngle < 0.5325 || timeAngle > 0.9675) ? 1.0 : -1.0);
+#else
+    vec3 lightVec = sunVec;
+#endif
+
+#if WATER_STYLE >= 2 || RAIN_PUDDLES >= 1 && WATER_STYLE == 1 && WATER_MAT_QUALITY >= 2 || defined GENERATED_NORMALS || defined CUSTOM_PBR
+    mat3 tbnMatrix = mat3(
+        tangent.x, binormal.x, normal.x,
+        tangent.y, binormal.y, normal.y,
+        tangent.z, binormal.z, normal.z
+    );
+#endif
+
+//Common Functions//
+float GetLinearDepth(float depth) {
+    return (2.0 * near) / (far + near - depth * (far - near));
+}
+
+//Includes//
+
+#endif
+
+#if WATER_REFLECT_QUALITY >= 0
+        #if AURORA_STYLE > 0
+        #endif
+
+        #if NIGHT_NEBULAE == 1
+        #else
+        #endif
+
+        #ifdef VL_CLOUDS_ACTIVE
+        #endif
+    #endif
+
+#endif
+
+#ifdef TAA
+#endif
+
+#if defined GENERATED_NORMALS || defined COATED_TEXTURES || WATER_STYLE >= 2
+#endif
+
+#ifdef GENERATED_NORMALS
+#endif
+
+#if IPBR_EMISSIVE_MODE != 1
+#endif
+
+#ifdef CUSTOM_PBR
+#endif
+
+#ifdef ATM_COLOR_MULTS
+#endif
+#ifdef MOON_PHASE_INF_ATMOSPHERE
+#endif
+
+#ifdef COLOR_CODED_PROGRAMS
+#endif
+
+#ifdef PORTAL_EDGE_EFFECT
+#endif
+
+#ifdef CONNECTED_GLASS_EFFECT
+#endif
+
+//Program//
+
+
+    // Body
 
     vec4 colorP = texture2D(tex, texCoord);
     vec4 color = colorP * vec4(glColor.rgb, 1.0);

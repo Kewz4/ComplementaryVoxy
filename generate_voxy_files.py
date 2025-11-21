@@ -16,57 +16,67 @@ def extract_uniforms(filepath):
             uniforms[name] = type_name
     return uniforms
 
-def extract_main_body(filepath):
+def extract_shader_parts(filepath):
+    """Extracts includes, logic (pre-main), and main body."""
     with open(filepath, 'r') as f:
         content = f.read()
 
     # Find start of main
-    match = re.search(r'void\s+main\s*\(\s*\)\s*\{', content)
-    if not match:
-        return None
+    match_main = re.search(r'void\s+main\s*\(\s*\)\s*\{', content)
+    if not match_main:
+        return "", "", ""
 
-    start_index = match.end()
+    start_main_index = match_main.end()
 
-    # Find matching closing brace
+    # Find matching closing brace for main
     brace_count = 1
-    end_index = start_index
-    while brace_count > 0 and end_index < len(content):
-        if content[end_index] == '{':
+    end_main_index = start_main_index
+    while brace_count > 0 and end_main_index < len(content):
+        if content[end_main_index] == '{':
             brace_count += 1
-        elif content[end_index] == '}':
+        elif content[end_main_index] == '}':
             brace_count -= 1
-        end_index += 1
+        end_main_index += 1
 
+    main_body = ""
     if brace_count == 0:
-        return content[start_index:end_index-1] # Exclude the closing brace
-    return None
+        main_body = content[start_main_index:end_main_index-1]
 
-def get_used_uniforms(source_code, available_uniforms):
-    """Returns a list of uniform names that appear in the source code."""
-    used = set()
-    # Remove comments to avoid false positives
-    code_no_comments = re.sub(r'//.*', '', source_code)
-    code_no_comments = re.sub(r'/\*.*?\*/', '', code_no_comments, flags=re.DOTALL)
+    # Process pre-main content
+    pre_main_raw = content[:match_main.start()]
 
-    for name, type_name in available_uniforms.items():
-        if re.search(r'\b' + re.escape(name) + r'\b', code_no_comments):
-            used.add(name)
+    includes_block = ""
+    logic_block = ""
 
-    return sorted(list(used))
+    for line in pre_main_raw.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#version"):
+            continue
+        if "FRAGMENT_SHADER" in line or "GBUFFERS_" in line or "OVERWORLD" in line or "NETHER" in line or "END" in line:
+            continue
+
+        if stripped.startswith("#include"):
+            includes_block += line + "\n"
+        elif stripped.startswith("in ") or stripped.startswith("flat in ") or stripped.startswith("noperspective in ") or stripped.startswith("out "):
+            # Skip varying declarations as we mock them locally or provide outputs
+            continue
+        elif stripped.startswith("uniform "):
+            # Skip uniforms (handled by voxy.json and guards)
+            continue
+        else:
+            # Keep logic, comments, other defines
+            logic_block += line + "\n"
+
+    return includes_block, logic_block, main_body
 
 # Load all available uniforms
 available_uniforms = extract_uniforms('shaders/lib/uniforms.glsl')
 
 # Extract logic
-opaque_body = extract_main_body('shaders/program/gbuffers_terrain.glsl')
-translucent_body = extract_main_body('shaders/program/gbuffers_water.glsl')
+opaque_includes, opaque_logic, opaque_body = extract_shader_parts('shaders/program/gbuffers_terrain.glsl')
+translucent_includes, translucent_logic, translucent_body = extract_shader_parts('shaders/program/gbuffers_water.glsl')
 
 # Fix gl_FragData usage
-# Voxy requires us to use explicit output variables mapped to locations 0, 1, 2...
-# and map those locations to actual buffers via json.
-# The original code assumes gl_FragData[0] goes to the first buffer in DRAWBUFFERS, etc.
-# So we replace gl_FragData[x] with voxyOutX and declare them.
-
 def fix_outputs(body):
     # Find max index used
     max_idx = -1
@@ -96,11 +106,9 @@ def filter_uniforms(uniform_names, available_uniforms_map):
     for name in uniform_names:
         type_name = available_uniforms_map.get(name)
 
-        # Filter out unsupported types
         if type_name in ['ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4', 'bvec2', 'bvec3', 'bvec4']:
              continue
 
-        # Filter out problematic uniforms
         if name == 'inPaleGarden':
             continue
 
@@ -111,7 +119,6 @@ all_uniforms = sorted(list(available_uniforms.keys()))
 final_uniforms = filter_uniforms(all_uniforms, available_uniforms)
 
 
-# Samplers list based on common usage in Complementary
 samplers = {
     "tex": "sampler2D",
     "noisetex": "sampler2D",
@@ -145,19 +152,46 @@ samplers = {
     "textureAtlas": "sampler2D"
 }
 
-# Opaque GLSL - No #version
+macros = """
+#define texture2D texture
+#define texture2DLod textureLod
+#define COMPLEMENTARY_VOXY_PATCH
+
+// Mock unsupported uniforms
+#ifndef VOXY_MOCK_DEFINED
+#define VOXY_MOCK_DEFINED
+#endif
+"""
+
+polyfill = """
+// Polyfill for GetSunVector (Fragment Shader version)
+vec3 GetSunVector() {
+    const vec2 sunRotationData = vec2(cos(sunPathRotation * 0.01745329251994), -sin(sunPathRotation * 0.01745329251994));
+    #ifdef OVERWORLD
+        float ang = fract(timeAngle - 0.25);
+        ang = (ang + (cos(ang * 3.14159265358979) * -0.5 + 0.5 - ang) / 3.0) * 6.28318530717959;
+        return normalize((gbufferModelView * vec4(vec3(-sin(ang), cos(ang) * sunRotationData) * 2000.0, 1.0)).xyz);
+    #elif defined END
+        float ang = 0.0;
+        return normalize((gbufferModelView * vec4(vec3(0.0, sunRotationData * 2000.0), 1.0)).xyz);
+    #else
+        return vec3(0.0);
+    #endif
+}
+"""
+
+# Opaque GLSL
 opaque_glsl = """
 #define FRAGMENT_SHADER
 #define OVERWORLD
 #define GBUFFERS_TERRAIN
-#define COMPLEMENTARY_VOXY_PATCH
+#define VOXY
 
-#include "/lib/common.glsl"
+""" + macros + """
 
-// Mock unsupported uniforms if necessary
-#ifndef VOXY_MOCK_DEFINED
-#define VOXY_MOCK_DEFINED
-#endif
+""" + opaque_includes + """
+
+""" + polyfill + """
 
 """ + opaque_decls + """
 
@@ -169,17 +203,19 @@ void voxy_emitFragment(VoxyFragmentParameters parameters) {
 
     vec3 normal = vec3(uint((parameters.face>>1)==2), uint((parameters.face>>1)==0), uint((parameters.face>>1)==1)) * (float(int(parameters.face)&1)*2.0-1.0);
 
-    vec3 screenPos = vec3(gl_FragCoord.xy / vec2(viewWidth, viewHeight), gl_FragCoord.z);
-    vec4 ndc = vec4(screenPos.xy * 2.0 - 1.0, screenPos.z * 2.0 - 1.0, 1.0);
-    vec4 viewPos4 = gbufferProjectionInverse * ndc;
-    viewPos4 /= viewPos4.w;
-    vec3 viewPos = viewPos4.xyz;
-    vec3 vertexPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
+    vec3 voxy_screenPos = vec3(gl_FragCoord.xy / vec2(viewWidth, viewHeight), gl_FragCoord.z);
+    vec4 ndc = vec4(voxy_screenPos.xy * 2.0 - 1.0, voxy_screenPos.z * 2.0 - 1.0, 1.0);
+    vec4 voxy_viewPos4 = gbufferProjectionInverse * ndc;
+    voxy_viewPos4 /= voxy_viewPos4.w;
+    vec3 voxy_viewPos = voxy_viewPos4.xyz;
+    vec3 vertexPos = (gbufferModelViewInverse * vec4(voxy_viewPos, 1.0)).xyz;
 
     vec3 upVec = normalize(gbufferModelView[1].xyz);
     vec3 eastVec = normalize(gbufferModelView[0].xyz);
     vec3 northVec = normalize(gbufferModelView[2].xyz);
     vec3 sunVec = GetSunVector();
+
+    ivec2 atlasSize = textureSize(tex, 0);
 
     vec2 midCoord = vec2(0.0);
     vec2 signMidCoordPos = vec2(0.0);
@@ -189,25 +225,33 @@ void voxy_emitFragment(VoxyFragmentParameters parameters) {
         vec3 tangent = vec3(0.0);
     #endif
     #ifdef POM
-        vec3 viewVector = viewPos;
+        vec3 viewVector = voxy_viewPos;
         vec4 vTexCoordAM = vec4(0.0);
     #endif
     #if ANISOTROPIC_FILTER > 0
         vec4 spriteBounds = vec4(0.0);
     #endif
 
+    // Inject Logic (Common Variables)
+    """ + opaque_logic + """
+
+    // Body
     """ + opaque_body_fixed + """
 }
 """
 
-# Translucent GLSL - No #version
+# Translucent GLSL
 translucent_glsl = """
 #define FRAGMENT_SHADER
 #define OVERWORLD
 #define GBUFFERS_WATER
-#define COMPLEMENTARY_VOXY_PATCH
+#define VOXY
 
-#include "/lib/common.glsl"
+""" + macros + """
+
+""" + translucent_includes + """
+
+""" + polyfill + """
 
 """ + translucent_decls + """
 
@@ -219,17 +263,19 @@ void voxy_emitFragment(VoxyFragmentParameters parameters) {
 
     vec3 normal = vec3(uint((parameters.face>>1)==2), uint((parameters.face>>1)==0), uint((parameters.face>>1)==1)) * (float(int(parameters.face)&1)*2.0-1.0);
 
-    vec3 screenPos = vec3(gl_FragCoord.xy / vec2(viewWidth, viewHeight), gl_FragCoord.z);
-    vec4 ndc = vec4(screenPos.xy * 2.0 - 1.0, screenPos.z * 2.0 - 1.0, 1.0);
-    vec4 viewPos4 = gbufferProjectionInverse * ndc;
-    viewPos4 /= viewPos4.w;
-    vec3 viewPos = viewPos4.xyz;
-    vec3 playerPos = (gbufferModelViewInverse * vec4(viewPos, 1.0)).xyz;
+    vec3 voxy_screenPos = vec3(gl_FragCoord.xy / vec2(viewWidth, viewHeight), gl_FragCoord.z);
+    vec4 ndc = vec4(voxy_screenPos.xy * 2.0 - 1.0, voxy_screenPos.z * 2.0 - 1.0, 1.0);
+    vec4 voxy_viewPos4 = gbufferProjectionInverse * ndc;
+    voxy_viewPos4 /= voxy_viewPos4.w;
+    vec3 voxy_viewPos = voxy_viewPos4.xyz;
+    vec3 playerPos = (gbufferModelViewInverse * vec4(voxy_viewPos, 1.0)).xyz;
 
     vec3 upVec = normalize(gbufferModelView[1].xyz);
     vec3 eastVec = normalize(gbufferModelView[0].xyz);
     vec3 northVec = normalize(gbufferModelView[2].xyz);
     vec3 sunVec = GetSunVector();
+
+    ivec2 atlasSize = textureSize(tex, 0);
 
     vec2 midCoord = vec2(0.0);
     vec2 signMidCoordPos = vec2(0.0);
@@ -239,10 +285,14 @@ void voxy_emitFragment(VoxyFragmentParameters parameters) {
         vec3 tangent = vec3(0.0);
     #endif
     #ifdef POM
-        vec3 viewVector = viewPos;
+        vec3 viewVector = voxy_viewPos;
         vec4 vTexCoordAM = vec4(0.0);
     #endif
 
+    // Inject Logic
+    """ + translucent_logic + """
+
+    // Body
     """ + translucent_body_fixed + """
 }
 """
