@@ -13,6 +13,8 @@
 
 ---------------------------------------------------------------------------------------------*/
 
+#ifndef VOXY
+
 uniform bool heavyFog = false;
 
 uniform int blockEntityId;
@@ -174,3 +176,5 @@ uniform float inNetherWastes;
 uniform float inSoulValley;
 uniform float inWarpedForest;
 uniform float inPaleGarden;
+
+#endif

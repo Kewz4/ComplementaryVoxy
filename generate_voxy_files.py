@@ -45,13 +45,10 @@ def get_used_uniforms(source_code, available_uniforms):
     """Returns a list of uniform names that appear in the source code."""
     used = set()
     # Remove comments to avoid false positives
-    # Simple comment removal (not perfect but good enough for typical shaders)
     code_no_comments = re.sub(r'//.*', '', source_code)
     code_no_comments = re.sub(r'/\*.*?\*/', '', code_no_comments, flags=re.DOTALL)
 
     for name, type_name in available_uniforms.items():
-        # Simple regex to check if the variable name is used as a token
-        # \b matches word boundaries
         if re.search(r'\b' + re.escape(name) + r'\b', code_no_comments):
             used.add(name)
 
@@ -64,16 +61,35 @@ available_uniforms = extract_uniforms('shaders/lib/uniforms.glsl')
 opaque_body = extract_main_body('shaders/program/gbuffers_terrain.glsl')
 translucent_body = extract_main_body('shaders/program/gbuffers_water.glsl')
 
-# Combined logic for checking usage (include common files if possible, or just checking the bodies + what we know about includes)
-# Note: include expansion is hard to do perfectly without reading all files.
-# However, the error is about 'uniforms' list in voxy.json.
-# Voxy injects these uniforms. If we list them, Voxy tries to inject them.
-# If they are unsupported types (ivec2), Voxy crashes.
-# So we MUST exclude unsupported types from the list, EVEN IF THEY ARE USED.
-# If they are used, the shader will fail to compile (undefined variable).
-# But if they are unused, we can safely remove them.
+# Fix gl_FragData usage
+# Voxy requires us to use explicit output variables mapped to locations 0, 1, 2...
+# and map those locations to actual buffers via json.
+# The original code assumes gl_FragData[0] goes to the first buffer in DRAWBUFFERS, etc.
+# So we replace gl_FragData[x] with voxyOutX and declare them.
 
-# Also, we need to remove 'inPaleGarden' because of the Iris resolution error.
+def fix_outputs(body):
+    # Find max index used
+    max_idx = -1
+    matches = re.findall(r'gl_FragData\[(\d+)\]', body)
+    for m in matches:
+        idx = int(m)
+        if idx > max_idx:
+            max_idx = idx
+
+    # Replace
+    for i in range(max_idx + 1):
+        body = body.replace(f'gl_FragData[{i}]', f'voxyOut{i}')
+
+    # Generate declarations
+    decls = ""
+    for i in range(max_idx + 1):
+        decls += f"layout(location = {i}) out vec4 voxyOut{i};\n"
+
+    return decls, body
+
+opaque_decls, opaque_body_fixed = fix_outputs(opaque_body)
+translucent_decls, translucent_body_fixed = fix_outputs(translucent_body)
+
 
 def filter_uniforms(uniform_names, available_uniforms_map):
     filtered = []
@@ -82,8 +98,6 @@ def filter_uniforms(uniform_names, available_uniforms_map):
 
         # Filter out unsupported types
         if type_name in ['ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4', 'bvec2', 'bvec3', 'bvec4']:
-             # Voxy 0.2.5/0.2.6 likely doesn't support these or specific ones like Vector2Integer
-             # The error explicitly mentioned Vector2IntegerJomlUniform
              continue
 
         # Filter out problematic uniforms
@@ -92,23 +106,6 @@ def filter_uniforms(uniform_names, available_uniforms_map):
 
         filtered.append(name)
     return filtered
-
-
-# Get used uniforms in the opaque and translucent bodies
-# Note: This check is imperfect because it doesn't scan included files in lib/.
-# However, the primary goal is to filter the list we put in voxy.json.
-# If we put a uniform in voxy.json, Voxy tries to bind it.
-# If we omit it, Voxy doesn't bind it.
-# If the shader uses it (e.g. in a lib function), and it's not injected, the shader compilation will fail.
-# BUT, the user is crashing at Java level (Voxy/Iris loading), not Shader compilation level (yet).
-# The Java crash on 'Vector2Integer' is blocking.
-# So we MUST remove 'ivec2' uniforms (atlasSize, eyeBrightness) from voxy.json.
-# If the shader needs them, we are in trouble, but maybe we can mock them or they are not actually used in the Voxy path.
-# 'inPaleGarden' is also causing a crash (Iris resolution).
-
-# Let's build the list of all uniforms found in uniforms.glsl, but filtered.
-# We will assume that if it's in uniforms.glsl, it might be used.
-# We will just filter out the ones we KNOW cause crashes.
 
 all_uniforms = sorted(list(available_uniforms.keys()))
 final_uniforms = filter_uniforms(all_uniforms, available_uniforms)
@@ -148,8 +145,8 @@ samplers = {
     "textureAtlas": "sampler2D"
 }
 
-# Opaque GLSL
-opaque_glsl = """#version 130
+# Opaque GLSL - No #version
+opaque_glsl = """
 #define FRAGMENT_SHADER
 #define OVERWORLD
 #define GBUFFERS_TERRAIN
@@ -160,28 +157,14 @@ opaque_glsl = """#version 130
 // Mock unsupported uniforms if necessary
 #ifndef VOXY_MOCK_DEFINED
 #define VOXY_MOCK_DEFINED
-// Helper to mock things if they are missing
-// But strictly speaking, we can't define uniforms here if they are already defined in uniforms.glsl (which is included via common.glsl)
-// Wait, uniforms.glsl defines them.
-// If Voxy injects them, it prepends the declaration? No, Voxy doc says:
-// "these are automatically added/injected into your patch so YOU MUST NOT DEFINE THE UNIFORMS IN YOUR PATCH DATA"
-// But standard shader files (included via common.glsl) HAVE the uniform declarations.
-// Usually Iris handles this by deduplicating or Voxy handles it.
-// But if Voxy FAILS to inject them (because we removed them from JSON), but they are declared in uniforms.glsl...
-// Then they exist as declarations but have no value bound? Or does Voxy strip them?
-// The problem is "Type not implemented". Voxy tries to read the uniform value from Iris/Game and upload it.
-// If we don't ask Voxy to do it (remove from JSON), the uniform variable remains in the source (from common.glsl -> uniforms.glsl).
-// It will be initialized to 0.
-// This is PERFECT for 'inPaleGarden' (0 means not in pale garden).
-// For 'atlasSize', 0 might cause division by zero or other issues.
-// For 'eyeBrightness', 0 is dark.
-// Let's hope 0 is a safe default.
 #endif
+
+""" + opaque_decls + """
 
 void voxy_emitFragment(VoxyFragmentParameters parameters) {
     vec2 texCoord = parameters.uv;
     vec2 lmCoord = clamp((parameters.lightMap - 0.03125) * 1.06667, 0.0, 1.0);
-    vec4 glColorRaw = parameters.tinting;
+    vec4 glColor = parameters.tinting;
     int mat = int(parameters.customId);
 
     vec3 normal = vec3(uint((parameters.face>>1)==2), uint((parameters.face>>1)==0), uint((parameters.face>>1)==1)) * (float(int(parameters.face)&1)*2.0-1.0);
@@ -213,18 +196,20 @@ void voxy_emitFragment(VoxyFragmentParameters parameters) {
         vec4 spriteBounds = vec4(0.0);
     #endif
 
-    """ + opaque_body + """
+    """ + opaque_body_fixed + """
 }
 """
 
-# Translucent GLSL
-translucent_glsl = """#version 130
+# Translucent GLSL - No #version
+translucent_glsl = """
 #define FRAGMENT_SHADER
 #define OVERWORLD
 #define GBUFFERS_WATER
 #define VOXY
 
 #include "/lib/common.glsl"
+
+""" + translucent_decls + """
 
 void voxy_emitFragment(VoxyFragmentParameters parameters) {
     vec2 texCoord = parameters.uv;
@@ -258,7 +243,7 @@ void voxy_emitFragment(VoxyFragmentParameters parameters) {
         vec4 vTexCoordAM = vec4(0.0);
     #endif
 
-    """ + translucent_body + """
+    """ + translucent_body_fixed + """
 }
 """
 

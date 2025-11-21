@@ -1,10 +1,17 @@
-#version 130
+
 #define FRAGMENT_SHADER
 #define OVERWORLD
 #define GBUFFERS_WATER
 #define VOXY
 
 #include "/lib/common.glsl"
+
+layout(location = 0) out vec4 voxyOut0;
+layout(location = 1) out vec4 voxyOut1;
+layout(location = 2) out vec4 voxyOut2;
+layout(location = 3) out vec4 voxyOut3;
+layout(location = 4) out vec4 voxyOut4;
+
 
 void voxy_emitFragment(VoxyFragmentParameters parameters) {
     vec2 texCoord = parameters.uv;
@@ -167,22 +174,22 @@ void voxy_emitFragment(VoxyFragmentParameters parameters) {
     color.a = prevAlpha * (1.0 - skyFade);
 
     /* DRAWBUFFERS:03 */
-    gl_FragData[0] = color;
-    gl_FragData[1] = vec4(1.0 - translucentMult.rgb, translucentMult.a);
+    voxyOut0 = color;
+    voxyOut1 = vec4(1.0 - translucentMult.rgb, translucentMult.a);
 
     #if DETAIL_QUALITY >= 3 || (WATER_REFLECT_QUALITY > 0 && WORLD_SPACE_REFLECTIONS > 0)
         /* DRAWBUFFERS:036 */
-        gl_FragData[2] = vec4(1.0, materialMask, skyLightFactor, 1.0);
+        voxyOut2 = vec4(1.0, materialMask, skyLightFactor, 1.0);
 
         #if WORLD_SPACE_REFLECTIONS > 0
             /* DRAWBUFFERS:03648 */
-            gl_FragData[3] = vec4(mat3(gbufferModelViewInverse) * normalM, sqrt(fresnelM * color.a * fogAlpha));
-            gl_FragData[4] = vec4(reflection.rgb * fresnelM * color.a * fogAlpha, reflection.a);
+            voxyOut3 = vec4(mat3(gbufferModelViewInverse) * normalM, sqrt(fresnelM * color.a * fogAlpha));
+            voxyOut4 = vec4(reflection.rgb * fresnelM * color.a * fogAlpha, reflection.a);
         #endif
     #elif WORLD_SPACE_REFLECTIONS > 0
         /* DRAWBUFFERS:0348 */
-        gl_FragData[2] = vec4(mat3(gbufferModelViewInverse) * normalM, sqrt(fresnelM * color.a * fogAlpha));
-        gl_FragData[3] = vec4(reflection.rgb * fresnelM * color.a * fogAlpha, reflection.a);
+        voxyOut2 = vec4(mat3(gbufferModelViewInverse) * normalM, sqrt(fresnelM * color.a * fogAlpha));
+        voxyOut3 = vec4(reflection.rgb * fresnelM * color.a * fogAlpha, reflection.a);
     #endif
 
 }
