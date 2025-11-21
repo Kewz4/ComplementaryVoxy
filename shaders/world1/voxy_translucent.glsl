@@ -2,7 +2,7 @@
 #define FRAGMENT_SHADER
 #define END
 #define GBUFFERS_WATER
-#define VOXY
+#define COMPLEMENTARY_VOXY_PATCH
 
 #include "/lib/common.glsl"
 

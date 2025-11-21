@@ -13,7 +13,7 @@
 
 ---------------------------------------------------------------------------------------------*/
 
-#ifndef VOXY
+#ifndef COMPLEMENTARY_VOXY_PATCH
 
 uniform bool heavyFog = false;
 

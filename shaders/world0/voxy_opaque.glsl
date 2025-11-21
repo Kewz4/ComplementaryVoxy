@@ -2,7 +2,7 @@
 #define FRAGMENT_SHADER
 #define OVERWORLD
 #define GBUFFERS_TERRAIN
-#define VOXY
+#define COMPLEMENTARY_VOXY_PATCH
 
 #include "/lib/common.glsl"
 
