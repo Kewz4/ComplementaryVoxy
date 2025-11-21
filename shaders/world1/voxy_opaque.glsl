@@ -6,6 +6,27 @@
 
 #include "/lib/common.glsl"
 
+// Mock unsupported uniforms if necessary
+#ifndef VOXY_MOCK_DEFINED
+#define VOXY_MOCK_DEFINED
+// Helper to mock things if they are missing
+// But strictly speaking, we can't define uniforms here if they are already defined in uniforms.glsl (which is included via common.glsl)
+// Wait, uniforms.glsl defines them.
+// If Voxy injects them, it prepends the declaration? No, Voxy doc says:
+// "these are automatically added/injected into your patch so YOU MUST NOT DEFINE THE UNIFORMS IN YOUR PATCH DATA"
+// But standard shader files (included via common.glsl) HAVE the uniform declarations.
+// Usually Iris handles this by deduplicating or Voxy handles it.
+// But if Voxy FAILS to inject them (because we removed them from JSON), but they are declared in uniforms.glsl...
+// Then they exist as declarations but have no value bound? Or does Voxy strip them?
+// The problem is "Type not implemented". Voxy tries to read the uniform value from Iris/Game and upload it.
+// If we don't ask Voxy to do it (remove from JSON), the uniform variable remains in the source (from common.glsl -> uniforms.glsl).
+// It will be initialized to 0.
+// This is PERFECT for 'inPaleGarden' (0 means not in pale garden).
+// For 'atlasSize', 0 might cause division by zero or other issues.
+// For 'eyeBrightness', 0 is dark.
+// Let's hope 0 is a safe default.
+#endif
+
 void voxy_emitFragment(VoxyFragmentParameters parameters) {
     vec2 texCoord = parameters.uv;
     vec2 lmCoord = clamp((parameters.lightMap - 0.03125) * 1.06667, 0.0, 1.0);

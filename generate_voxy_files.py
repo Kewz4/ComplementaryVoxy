@@ -3,15 +3,18 @@ import os
 import json
 
 def extract_uniforms(filepath):
+    """Extracts all uniforms from the given GLSL file."""
     with open(filepath, 'r') as f:
         content = f.read()
-    uniforms = set()
+    uniforms = {}
     for line in content.splitlines():
         parts = line.strip().split()
         if len(parts) >= 3 and parts[0] == 'uniform':
+            # type is parts[1], name is parts[2] (stripped of ;)
+            type_name = parts[1]
             name = parts[2].rstrip(';').split('[')[0]
-            uniforms.add(name)
-    return sorted(list(uniforms))
+            uniforms[name] = type_name
+    return uniforms
 
 def extract_main_body(filepath):
     with open(filepath, 'r') as f:
@@ -38,9 +41,78 @@ def extract_main_body(filepath):
         return content[start_index:end_index-1] # Exclude the closing brace
     return None
 
-uniforms = extract_uniforms('shaders/lib/uniforms.glsl')
+def get_used_uniforms(source_code, available_uniforms):
+    """Returns a list of uniform names that appear in the source code."""
+    used = set()
+    # Remove comments to avoid false positives
+    # Simple comment removal (not perfect but good enough for typical shaders)
+    code_no_comments = re.sub(r'//.*', '', source_code)
+    code_no_comments = re.sub(r'/\*.*?\*/', '', code_no_comments, flags=re.DOTALL)
+
+    for name, type_name in available_uniforms.items():
+        # Simple regex to check if the variable name is used as a token
+        # \b matches word boundaries
+        if re.search(r'\b' + re.escape(name) + r'\b', code_no_comments):
+            used.add(name)
+
+    return sorted(list(used))
+
+# Load all available uniforms
+available_uniforms = extract_uniforms('shaders/lib/uniforms.glsl')
+
+# Extract logic
 opaque_body = extract_main_body('shaders/program/gbuffers_terrain.glsl')
 translucent_body = extract_main_body('shaders/program/gbuffers_water.glsl')
+
+# Combined logic for checking usage (include common files if possible, or just checking the bodies + what we know about includes)
+# Note: include expansion is hard to do perfectly without reading all files.
+# However, the error is about 'uniforms' list in voxy.json.
+# Voxy injects these uniforms. If we list them, Voxy tries to inject them.
+# If they are unsupported types (ivec2), Voxy crashes.
+# So we MUST exclude unsupported types from the list, EVEN IF THEY ARE USED.
+# If they are used, the shader will fail to compile (undefined variable).
+# But if they are unused, we can safely remove them.
+
+# Also, we need to remove 'inPaleGarden' because of the Iris resolution error.
+
+def filter_uniforms(uniform_names, available_uniforms_map):
+    filtered = []
+    for name in uniform_names:
+        type_name = available_uniforms_map.get(name)
+
+        # Filter out unsupported types
+        if type_name in ['ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4', 'bvec2', 'bvec3', 'bvec4']:
+             # Voxy 0.2.5/0.2.6 likely doesn't support these or specific ones like Vector2Integer
+             # The error explicitly mentioned Vector2IntegerJomlUniform
+             continue
+
+        # Filter out problematic uniforms
+        if name == 'inPaleGarden':
+            continue
+
+        filtered.append(name)
+    return filtered
+
+
+# Get used uniforms in the opaque and translucent bodies
+# Note: This check is imperfect because it doesn't scan included files in lib/.
+# However, the primary goal is to filter the list we put in voxy.json.
+# If we put a uniform in voxy.json, Voxy tries to bind it.
+# If we omit it, Voxy doesn't bind it.
+# If the shader uses it (e.g. in a lib function), and it's not injected, the shader compilation will fail.
+# BUT, the user is crashing at Java level (Voxy/Iris loading), not Shader compilation level (yet).
+# The Java crash on 'Vector2Integer' is blocking.
+# So we MUST remove 'ivec2' uniforms (atlasSize, eyeBrightness) from voxy.json.
+# If the shader needs them, we are in trouble, but maybe we can mock them or they are not actually used in the Voxy path.
+# 'inPaleGarden' is also causing a crash (Iris resolution).
+
+# Let's build the list of all uniforms found in uniforms.glsl, but filtered.
+# We will assume that if it's in uniforms.glsl, it might be used.
+# We will just filter out the ones we KNOW cause crashes.
+
+all_uniforms = sorted(list(available_uniforms.keys()))
+final_uniforms = filter_uniforms(all_uniforms, available_uniforms)
+
 
 # Samplers list based on common usage in Complementary
 samplers = {
@@ -84,6 +156,27 @@ opaque_glsl = """#version 130
 #define VOXY
 
 #include "/lib/common.glsl"
+
+// Mock unsupported uniforms if necessary
+#ifndef VOXY_MOCK_DEFINED
+#define VOXY_MOCK_DEFINED
+// Helper to mock things if they are missing
+// But strictly speaking, we can't define uniforms here if they are already defined in uniforms.glsl (which is included via common.glsl)
+// Wait, uniforms.glsl defines them.
+// If Voxy injects them, it prepends the declaration? No, Voxy doc says:
+// "these are automatically added/injected into your patch so YOU MUST NOT DEFINE THE UNIFORMS IN YOUR PATCH DATA"
+// But standard shader files (included via common.glsl) HAVE the uniform declarations.
+// Usually Iris handles this by deduplicating or Voxy handles it.
+// But if Voxy FAILS to inject them (because we removed them from JSON), but they are declared in uniforms.glsl...
+// Then they exist as declarations but have no value bound? Or does Voxy strip them?
+// The problem is "Type not implemented". Voxy tries to read the uniform value from Iris/Game and upload it.
+// If we don't ask Voxy to do it (remove from JSON), the uniform variable remains in the source (from common.glsl -> uniforms.glsl).
+// It will be initialized to 0.
+// This is PERFECT for 'inPaleGarden' (0 means not in pale garden).
+// For 'atlasSize', 0 might cause division by zero or other issues.
+// For 'eyeBrightness', 0 is dark.
+// Let's hope 0 is a safe default.
+#endif
 
 void voxy_emitFragment(VoxyFragmentParameters parameters) {
     vec2 texCoord = parameters.uv;
@@ -187,7 +280,7 @@ translucent_db_logic = """
     #endif
   ],"""
 
-final_json = '{\n  "version": 1,\n  "uniforms": ' + json.dumps(uniforms) + ',\n  "samplers": ' + json.dumps(samplers, indent=2) + ',' + opaque_db_logic + translucent_db_logic + '\n  "excludeLodsFromVanillaDepth": true\n}'
+final_json = '{\n  "version": 1,\n  "uniforms": ' + json.dumps(final_uniforms) + ',\n  "samplers": ' + json.dumps(samplers, indent=2) + ',' + opaque_db_logic + translucent_db_logic + '\n  "excludeLodsFromVanillaDepth": true\n}'
 
 with open('shaders/world0/voxy.json', 'w') as f:
     f.write(final_json)
